@@ -1,0 +1,264 @@
+---
+title: "haar"
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+
+library(imager)
+
+
+```
+
+The goal of this mini project is to use the Haar basis functions to approximate
+1-D (e.g. a time series trace) and 2-D (e.g. an image) data structures.
+
+The Haar functions are a series of square-shaped functions that form an orthonormal basis, similar to the Fourier basis. This is a deep and interesting field and I'd encourage the curious reader to check out the [Haar wavelet Wikipedia page for more information](https://en.wikipedia.org/wiki/Haar_wavelet).
+
+I will:
+1. Define a function for constructing any Haar matrix transformation.
+2. Use the Haar basis to decompose a time series wavelet, and reconstruct that wavelet one Haar function at a time.
+3. Repeat 2. for an image. 
+
+
+First, I'll define functions for constructing Haar transform matrices.
+
+This recursive method for constructing Haar matrices is outlined in the Haar wavelet [Wikipedia page](https://en.wikipedia.org/wiki/Haar_wavelet).
+
+Note: Dimension of Haar matrix must be on 2^k 
+where k is a positive, nonzero integer.
+```{r}
+
+proc_next_haar_matrix_ <- function(H_n_) {
+  ####
+  # Function defining recursive step for constructing Haar matrix.
+  # Called in proc_haar_matrix_(n_).
+  ####
+  n_ <- dim((H_n_))[1]
+  next_H_n_ <-  (1/sqrt(2)) * matrix(c(kronecker(H_n_, matrix(c(1,1), nrow=2, ncol=1)), kronecker(diag(n_),matrix(c(1,-1), nrow=2, ncol=1) ) ), nrow=n_*2, ncol=n_*2)
+  return(next_H_n_)
+}
+
+proc_haar_matrix_ <- function(n_) {
+  ##########
+  # Returns n_-dimensional Haar matrix with basis vectors as columns.
+  #
+  # n_ : Dimension of desired Haar transform matrix
+  #      such that n_ is on 2^k where k is a positive,
+  #      nonzero integer.
+  ##########
+  iGlobal_ <- log(n_) / log(2)
+  if ( iGlobal_ %% 1 == 0) {
+    H_n_ <- (1/sqrt(2)) * matrix(c(1,1,1,-1), nrow=2, ncol=2)
+    i_ <- 1
+    while (i_ < iGlobal_ ) {
+      H_n_ <- proc_next_haar_matrix_(H_n_)
+      i_ <- i_ + 1
+    }
+  }
+  else {
+    stop('Arg must be on 2^k where k is a positive, nonzero integer.')
+  }
+  return(H_n_)
+}
+```
+
+Below I'll try constructing some Haar matrices.
+```{r}
+H_2 <- proc_haar_matrix_(2)
+print(H_2)
+H_4 <- proc_haar_matrix_(4)
+print(H_4)
+H_8 <- proc_haar_matrix_(8)
+print(H_8)
+H_16 <- proc_haar_matrix_(16)
+print(H_16)
+H_32 <- proc_haar_matrix_(32)
+#print(H_32)
+H_64 <- proc_haar_matrix_(64)
+#print(H_64)
+
+# Get error on below call as expected
+#H_3 <- proc_haar_matrix_(3)
+```
+
+Haar matrices should be unitary. That means that their inverse is simply their conjugate transform. Since Haar matrices are also real valued, any Haar matrix times its transpose should result in the relevant n-dimensional identity matrix.
+
+Let's check that the Haar matrices we're building are unitary.
+
+Should get relevant n-dimensional identity matrices below.
+```{r}
+H_2 %*% t(H_2)
+H_4 %*% t(H_4)
+H_8 %*% t(H_8)
+H_16 %*% t(H_16)
+```
+Now we're ready to use a Haar matrix to decompose a vector.
+
+First I'll define functions for scaling a signal and getting its piece-wise aggregate approximation (PAA). 
+
+PAA is a useful method for decreasing the numerosity of time series data while preserving the fidelity of the signal as much as possible. Since the PAA isn't the focus of this exercise, I'll refer the interested reader to [Keogh et al.'s paper](https://www.cs.ucr.edu/~eamonn/kais_2000.pdf).
+```{r}
+
+normalize_ <- function(x){
+  out_ <- (x - mean(x))/ sd(x)
+  return(out_)
+}
+
+
+proc_paa_ <- function(x, stw_width_){
+  
+  m_ <- matrix(x, ncol=stw_width_, byrow=TRUE)
+  
+  #print(m_)
+  
+  rowMeans(m_) #careful, must use humpback type for correct keyword
+  
+}
+```
+
+
+First, we'll start with a 1-D time series.
+
+This time series is from the hydraulic systems data set in UC Irvine's publicly-available [Machine Learning Repository](https://archive.ics.uci.edu/ml/datasets/Condition+monitoring+of+hydraulic+systems).
+
+Here I'll look at data from a sensor measuring volume flow through part of a system in l/min, sampled at 10 Hz.
+
+Please note that I've reshaped the original data into a 1-D, time-ordered vector to mimic a telemetry stream. If you pull down the UCI hydraulic systems data yourself it will not be in this format.
+```{r}
+fs1_f_  <- 'telem_FS1.csv'
+telem_fs1_  <- read.csv(file=fs1_f_, header=TRUE)
+```
+
+Get PAA of telemetry signal.
+
+(Note: I use a window size of 10 to compute the PAA since the sampling rate was 10 Hz. Now we'll have one data point per second -- a little easier to deal with.)
+```{r}
+paa_telem_fs1_ <- normalize_(proc_paa_(as.matrix(telem_fs1_['val_']), 10))
+```
+
+From the description of the data set provided by the folks at UCI, I know that one system cycle takes 60s. In order to use the Haar decomposition we have to find subsections of the data that have a length on on 2^k where k is a positive, nonzero integer. Given these two constraints, I'll choose sub-segments of length 64 (2^6).
+
+Find a 64s-long segment in the telemetry that looks like one cycle.
+```{r}
+i_ <- 5
+plot(paa_telem_fs1_[i_: (i_+63)],type='l')
+test_seg_ <- c(paa_telem_fs1_[i_: (i_+63)])
+#print(length(test_seg_))
+```
+
+Let's decompose this wavelet into the Haar basis.
+```{r}
+haar_seg_ <-   t(H_64) %*% test_seg_ 
+
+```
+
+Out of curiosity, let's plot the frequency spectrum of the wavelet in Haar space.
+```{r}
+plot.frequency.spectrum <- function(X.k, xlimits=c(0,length(X.k))) {
+  plot.data  <- cbind(0:(length(X.k)-1), Mod(X.k))
+
+  # TODO: why this scaling is necessary?
+  plot.data[2:length(X.k),2] <- 2*plot.data[2:length(X.k),2] 
+  
+  plot(plot.data, t="h", lwd=2, main="", 
+       xlab="Frequency (Hz)", ylab="Strength", 
+       xlim=xlimits, ylim=c(0,max(Mod(plot.data[,2]))))
+}
+
+# Plot in Haar frequency space.
+plot.frequency.spectrum(haar_seg_)
+```
+
+Now we can try reconstructing original signal using the first n basis vectors.
+See how the reconstructions compare.
+
+Note that this code can save these plots in a directory in the workspace called "haar," however I've commented out those lines of code here.
+```{r}
+haar_reconstruction_ <- matrix(nrow=64,ncol=63)
+
+for (i_ in 2:length(haar_seg_)) {
+  haar_reconstruction_[,i_-1] <- H_64[,1:i_] %*% haar_seg_[1:i_]
+  
+  if (i_ < 10) {
+    #png(file=paste('haar//0',i_,'.png',sep=''))
+  }
+  else {
+    #png(file=paste('haar//',i_,'.png',sep=''))
+  }
+  plot(haar_reconstruction_[,i_-1], type='l', main = i_, ylim = c(-2.1,1.1) )
+  #dev.off()
+}
+```
+
+We can see our wavelet starting to take shape one Haar function at a time. By about the 55th function there's barely a difference from the original function.
+
+
+Now I'll try decomposing an image into the Haar basis.
+I'll use a grayscale version of the "boats" image from the ImageR library.
+```{r}
+im_ <- boats
+plot(im_)
+
+# Convert to grayscale for simplicity.
+im_gray_ <- grayscale(im_)
+plot(im_gray_)
+
+# Convert grayscale image to data frame.
+im_gray_df_ <- as.data.frame(im_gray_)
+head(im_gray_df_)
+print(dim(im_gray_))
+```
+
+Image is 384 x 256 pixels. This is great since 256 = 2^8, so we can use the 256 Haar matrix.
+
+Get the 256 Haar matrix and get image in matrix format.
+```{r}
+H_256_ <- proc_haar_matrix_(256)
+
+# We'll need to do some rotating and transposing to get the matrix right.
+rotate <- function(x) t(apply(x, 2, rev))
+show_im <- function(im) image(im, col=grey(seq(0,1,length=256)), asp=1.56)
+
+im_m_ <- rotate(t(matrix(im_gray_df_[,'value'], nrow =256, ncol=384)))
+dim(im_m_)
+show_im(im_m_)
+text(0.5,0.9,"1", col='white')
+```
+
+Out of curiosity let's transform the image to Haar space and plot it.
+```{r}
+haar_im_ <- t(H_256_) %*% im_m_
+#print(dim(haar_im_))
+show_im(haar_im_)
+text(0.5,.9,"In Haar space", col = 'white')
+```
+
+Kind of hard to interpret.
+
+Let's now reconstruct the image one Haar function at a time.
+```{r}
+for (i_ in 2:dim(haar_im_)[1]) {
+  #haar_im_rec_vec_ <- matrix(haar_im_reconstruction_, nrow=256*384, ncol=1)
+  haar_im_reconstruction_ <- H_256_[,1:i_] %*% haar_im_[1:i_,]
+  
+  if (i_ < 10) {
+    #png(file=paste('haar-im-boats//00',i_,'.png',sep=''))
+  }
+  else if (i_ >= 10 && i_ < 100) {
+    #png(file=paste('haar-im-boats//0',i_,'.png',sep=''))
+  }
+  else {
+    #png(file=paste('haar-im-boats//',i_,'.png',sep=''))
+  }
+  show_im(haar_im_reconstruction_)
+  text(0.5,0.9,i_, col='white')
+  #dev.off()
+}
+```
+
+
+
